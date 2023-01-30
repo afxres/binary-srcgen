@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Debug Tuple Object Tests": {
+      "commandName": "DebugRoslynComponent",
+      "targetProject": "..\\Binary.SourceGeneration.TupleObjectTests\\Binary.SourceGeneration.TupleObjectTests.csproj"
+    }
+  }
+}
