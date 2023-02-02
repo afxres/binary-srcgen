@@ -3,18 +3,21 @@
 using Mikodev.Binary.Attributes;
 using Xunit;
 
+[SourceGenerationContext]
+public partial class TestSourceGenerationContext { }
+
+[TupleObject]
+public class Person
+{
+    [TupleKey(0)]
+    public required int Id { get; init; }
+
+    [TupleKey(1)]
+    public required string Name { get; init; }
+}
+
 public class BasicTests
 {
-    [TupleObject]
-    public class Person
-    {
-        [TupleKey(0)]
-        public required int Id { get; init; }
-
-        [TupleKey(1)]
-        public required string Name { get; init; }
-    }
-
     [Fact(DisplayName = "Main Test")]
     public void MainTest()
     {
