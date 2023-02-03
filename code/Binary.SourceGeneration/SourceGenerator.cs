@@ -19,6 +19,7 @@ public sealed class SourceGenerator : IIncrementalGenerator
 
         [System.AttributeUsage(System.AttributeTargets.All, Inherited = false, AllowMultiple = false)]
         internal sealed class SourceGenerationContextAttribute : System.Attribute { }
+
         """;
 
     private const string SourceGenerationContextAttributeTypeName = "Mikodev.Binary.Attributes.SourceGenerationContextAttribute";
@@ -27,11 +28,21 @@ public sealed class SourceGenerator : IIncrementalGenerator
 
     private const string ConverterTypeName = "Mikodev.Binary.Converter";
 
+    private const string DiagnosticCategory = "Mikodev.Binary.SourceGeneration";
+
     private static DiagnosticDescriptor ContextTypeMustBePartial { get; } = new DiagnosticDescriptor(
         id: "BINSRCGEN01",
-        title: "Context Classes Must Be Partial!",
+        title: "Context Type Must Be Partial!",
         messageFormat: "Require 'partial' keyword for source generation context type '{0}'.",
-        category: "Mikodev.Binary.SourceGeneration",
+        category: DiagnosticCategory,
+        defaultSeverity: DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    private static DiagnosticDescriptor ContextTypeMustHaveNamespace { get; } = new DiagnosticDescriptor(
+        id: "BINSRCGEN02",
+        title: "Context Type Must Have Namespace!",
+        messageFormat: "Require not global namespace for source generation context type '{0}'.",
+        category: DiagnosticCategory,
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
@@ -78,8 +89,26 @@ public sealed class SourceGenerator : IIncrementalGenerator
                 continue;
             }
             var @namespace = typeSymbol.ContainingNamespace;
+            if (@namespace.IsGlobalNamespace)
+            {
+                var location = typeSymbol.Locations.Length is 0 ? Location.None : typeSymbol.Locations.First();
+                context.ReportDiagnostic(Diagnostic.Create(ContextTypeMustHaveNamespace, location, new[] { typeSymbol.Name }));
+                continue;
+            }
             ContextTypeName = typeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
-            ContextNamespace = @namespace.IsGlobalNamespace ? string.Empty : @namespace.ToDisplayString();
+            ContextNamespace = @namespace.ToDisplayString();
+            var output =
+                $$"""
+                namespace {{ContextNamespace}};
+
+                partial class {{ContextTypeName}}
+                {
+                    private readonly System.Collections.Concurrent.ConcurrentDictionary<System.Type, Mikodev.Binary.IConverterCreator> creators = new();
+                }
+
+                """;
+            var fileName = GetSafeOutputFileName(typeSymbol);
+            context.AddSource($"{fileName}.g.cs", output);
         }
     }
 
@@ -117,8 +146,7 @@ public sealed class SourceGenerator : IIncrementalGenerator
                 var builder = new StringBuilder();
                 var typeName = typeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
                 var typeFullName = typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                if (string.IsNullOrEmpty(ContextNamespace) is false)
-                    _ = builder.AppendLine($"namespace {ContextNamespace};");
+                _ = builder.AppendLine($"namespace {ContextNamespace};");
                 _ = builder.AppendLine();
                 _ = builder.AppendLine($"partial class {ContextTypeName}");
                 _ = builder.AppendLine("{");
