@@ -46,9 +46,9 @@ public sealed class SourceGenerator : IIncrementalGenerator
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
-    private string? ContextTypeName;
+    private string? contextTypeName;
 
-    private string? ContextNamespace;
+    private string? contextTypeNamespace;
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
@@ -69,8 +69,8 @@ public sealed class SourceGenerator : IIncrementalGenerator
 
     private void GetOutputContextType(Compilation compilation, ImmutableArray<TypeDeclarationSyntax> nodes, SourceProductionContext context)
     {
-        this.ContextTypeName = null;
-        this.ContextNamespace = null;
+        this.contextTypeName = null;
+        this.contextTypeNamespace = null;
         if (nodes.IsDefaultOrEmpty)
             return;
         var contextAttributeSymbol = compilation.GetTypeByMetadataName(SourceGenerationContextAttributeTypeName);
@@ -95,13 +95,13 @@ public sealed class SourceGenerator : IIncrementalGenerator
                 context.ReportDiagnostic(Diagnostic.Create(ContextTypeMustHaveNamespace, location, new[] { typeSymbol.Name }));
                 continue;
             }
-            ContextTypeName = typeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
-            ContextNamespace = @namespace.ToDisplayString();
+            this.contextTypeName = typeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+            this.contextTypeNamespace = @namespace.ToDisplayString();
             var output =
                 $$"""
-                namespace {{ContextNamespace}};
+                namespace {{this.contextTypeNamespace}};
 
-                partial class {{ContextTypeName}}
+                partial class {{this.contextTypeName}}
                 {
                     private readonly System.Collections.Concurrent.ConcurrentDictionary<System.Type, Mikodev.Binary.IConverterCreator> creators = new();
                 }
@@ -128,7 +128,7 @@ public sealed class SourceGenerator : IIncrementalGenerator
 
     private void GetTupleObjectConverters(Compilation compilation, ImmutableArray<TypeDeclarationSyntax> nodes, SourceProductionContext context)
     {
-        if (ContextTypeName is null)
+        if (this.contextTypeName is null)
             return;
         if (nodes.IsDefaultOrEmpty)
             return;
@@ -143,24 +143,49 @@ public sealed class SourceGenerator : IIncrementalGenerator
             var attributes = typeSymbol.GetAttributes();
             if (attributes.Any(x => SymbolEqualityComparer.Default.Equals(x.AttributeClass, tupleObjectSymbol)))
             {
-                var builder = new StringBuilder();
-                var typeName = typeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
-                var typeFullName = typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                _ = builder.AppendLine($"namespace {ContextNamespace};");
-                _ = builder.AppendLine();
-                _ = builder.AppendLine($"partial class {ContextTypeName}");
-                _ = builder.AppendLine("{");
-                _ = builder.AppendLine($"    public class {typeName}Converter : {ConverterTypeName}<{typeFullName}>");
-                _ = builder.AppendLine("    {");
-                _ = builder.AppendLine($"        public override void Encode(ref Mikodev.Binary.Allocator allocator, {typeFullName} item) => throw new System.NotImplementedException();");
-                _ = builder.AppendLine();
-                _ = builder.AppendLine($"        public override {typeFullName} Decode(in System.ReadOnlySpan<byte> span) => throw new System.NotImplementedException();");
-                _ = builder.AppendLine("    }");
-                _ = builder.AppendLine("}");
-                var generated = builder.ToString();
-                var fileName = GetSafeOutputFileName(typeSymbol);
-                context.AddSource($"{fileName}.g.cs", generated);
+                GetTupleObjectConverter(typeSymbol, context);
             }
         }
+    }
+
+    private SymbolMemberInfo? GetPublicFiledOrProperty(ISymbol symbol)
+    {
+        if (symbol.DeclaredAccessibility is Accessibility.Public)
+        {
+            switch (symbol)
+            {
+                case IFieldSymbol fieldSymbol:
+                    return new SymbolMemberInfo(SymbolMemberType.Field, fieldSymbol.Name, fieldSymbol.IsReadOnly);
+                case IPropertySymbol propertySymbol:
+                    return new SymbolMemberInfo(SymbolMemberType.Property, propertySymbol.Name, propertySymbol.IsReadOnly);
+            }
+        }
+        return null;
+    }
+
+    private void GetTupleObjectConverter(INamedTypeSymbol typeSymbol, SourceProductionContext context)
+    {
+        context.CancellationToken.ThrowIfCancellationRequested();
+
+        var members = typeSymbol.GetMembers();
+        var publicMembers = members.Select(GetPublicFiledOrProperty).OfType<SymbolMemberInfo>().ToList();
+
+        var builder = new StringBuilder();
+        var typeName = typeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+        var typeFullName = typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        _ = builder.AppendLine($"namespace {this.contextTypeNamespace};");
+        _ = builder.AppendLine();
+        _ = builder.AppendLine($"partial class {this.contextTypeName}");
+        _ = builder.AppendLine("{");
+        _ = builder.AppendLine($"    public class {typeName}Converter : {ConverterTypeName}<{typeFullName}>");
+        _ = builder.AppendLine("    {");
+        _ = builder.AppendLine($"        public override void Encode(ref Mikodev.Binary.Allocator allocator, {typeFullName} item) => throw new System.NotImplementedException();");
+        _ = builder.AppendLine();
+        _ = builder.AppendLine($"        public override {typeFullName} Decode(in System.ReadOnlySpan<byte> span) => throw new System.NotImplementedException();");
+        _ = builder.AppendLine("    }");
+        _ = builder.AppendLine("}");
+        var generated = builder.ToString();
+        var fileName = GetSafeOutputFileName(typeSymbol);
+        context.AddSource($"{fileName}.g.cs", generated);
     }
 }
