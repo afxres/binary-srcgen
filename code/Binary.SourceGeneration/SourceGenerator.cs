@@ -4,8 +4,10 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 #nullable enable
@@ -115,11 +117,25 @@ public sealed class SourceGenerator : IIncrementalGenerator
     private static string GetSafeOutputFileName(INamedTypeSymbol symbol)
     {
         const string GlobalPrefix = "global::";
-        var fullName = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        var fullName = symbol.ToDisplayString(FullyQualifiedFormatNoSpecialTypes);
         var target = new StringBuilder(fullName);
         if (fullName.StartsWith(GlobalPrefix))
             _ = target.Remove(0, GlobalPrefix.Length);
         var invalidChars = new[] { '<', '>' };
+        foreach (var @char in invalidChars)
+            _ = target.Replace(@char, '_');
+        var result = target.ToString();
+        return result;
+    }
+
+    private static string GetSafePartTypeName(INamedTypeSymbol symbol)
+    {
+        const string GlobalPrefix = "global::";
+        var fullName = symbol.ToDisplayString(FullyQualifiedFormatNoSpecialTypes);
+        var target = new StringBuilder(fullName);
+        if (fullName.StartsWith(GlobalPrefix))
+            _ = target.Remove(0, GlobalPrefix.Length);
+        var invalidChars = new[] { '<', '>', '.' };
         foreach (var @char in invalidChars)
             _ = target.Replace(@char, '_');
         var result = target.ToString();
@@ -148,44 +164,157 @@ public sealed class SourceGenerator : IIncrementalGenerator
         }
     }
 
-    private SymbolMemberInfo? GetPublicFiledOrProperty(ISymbol symbol)
+    private SymbolMemberInfo? GetPublicFiledOrProperty(ISymbol symbol, StrongBox<int> index)
     {
         if (symbol.DeclaredAccessibility is Accessibility.Public)
         {
             switch (symbol)
             {
                 case IFieldSymbol fieldSymbol:
-                    return new SymbolMemberInfo(SymbolMemberType.Field, fieldSymbol.Name, fieldSymbol.IsReadOnly);
+                    return new SymbolMemberInfo(SymbolMemberType.Field, fieldSymbol.Name, fieldSymbol.IsReadOnly, fieldSymbol.Type, index.Value++);
                 case IPropertySymbol propertySymbol:
-                    return new SymbolMemberInfo(SymbolMemberType.Property, propertySymbol.Name, propertySymbol.IsReadOnly);
+                    return new SymbolMemberInfo(SymbolMemberType.Property, propertySymbol.Name, propertySymbol.IsReadOnly, propertySymbol.Type, index.Value++);
             }
         }
         return null;
     }
 
+    public static SymbolDisplayFormat FullyQualifiedFormatNoSpecialTypes { get; } =
+        new SymbolDisplayFormat(
+            globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
+            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
+            miscellaneousOptions: SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers);
+
     private void GetTupleObjectConverter(INamedTypeSymbol typeSymbol, SourceProductionContext context)
     {
-        context.CancellationToken.ThrowIfCancellationRequested();
+        var cancellation = context.CancellationToken;
+        cancellation.ThrowIfCancellationRequested();
 
-        var members = typeSymbol.GetMembers();
-        var publicMembers = members.Select(GetPublicFiledOrProperty).OfType<SymbolMemberInfo>().ToList();
+        var typeAliasIndex = 0;
+        var typeAliases = new Dictionary<string, string>();
 
+        string GetTypeAlias(ITypeSymbol type)
+        {
+            var typeFullName = type.ToDisplayString(FullyQualifiedFormatNoSpecialTypes);
+            if (typeAliases.TryGetValue(typeFullName, out var result))
+                return result;
+            var typeAlias = $"_T_{typeAliasIndex++}";
+            typeAliases.Add(typeFullName, typeAlias);
+            return typeAlias;
+        }
+
+        var sharedIndex = new StrongBox<int> { Value = 0 };
+        var members = typeSymbol.GetMembers().Select(x => GetPublicFiledOrProperty(x, sharedIndex)).OfType<SymbolMemberInfo>().OrderBy(x => x.Index).ToList();
+        foreach (var i in members)
+            _ = GetTypeAlias(i.Type);
+        var typeAlias = GetTypeAlias(typeSymbol);
         var builder = new StringBuilder();
-        var typeName = typeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
-        var typeFullName = typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-        _ = builder.AppendLine($"namespace {this.contextTypeNamespace};");
-        _ = builder.AppendLine();
-        _ = builder.AppendLine($"partial class {this.contextTypeName}");
-        _ = builder.AppendLine("{");
-        _ = builder.AppendLine($"    public class {typeName}Converter : {ConverterTypeName}<{typeFullName}>");
-        _ = builder.AppendLine("    {");
-        _ = builder.AppendLine($"        public override void Encode(ref Mikodev.Binary.Allocator allocator, {typeFullName} item) => throw new System.NotImplementedException();");
-        _ = builder.AppendLine();
-        _ = builder.AppendLine($"        public override {typeFullName} Decode(in System.ReadOnlySpan<byte> span) => throw new System.NotImplementedException();");
-        _ = builder.AppendLine("    }");
-        _ = builder.AppendLine("}");
-        var generated = builder.ToString();
-        var fileName = GetSafeOutputFileName(typeSymbol);
-        context.AddSource($"{fileName}.g.cs", generated);
+        var outputConverterName = $"{GetSafePartTypeName(typeSymbol)}__Converter";
+        builder.AppendIndent(0, $"namespace {this.contextTypeNamespace};");
+        builder.AppendIndent(0);
+        foreach (var i in typeAliases)
+            builder.AppendIndent(0, $"using {i.Value} = {i.Key};");
+        builder.AppendIndent(0);
+
+        builder.AppendIndent(0, $"partial class {this.contextTypeName}");
+        builder.AppendIndent(0, $"{{");
+        builder.AppendIndent(1, $"public class {outputConverterName} : {ConverterTypeName}<{typeAlias}>");
+        builder.AppendIndent(1, $"{{");
+        foreach (var i in members)
+        {
+            builder.AppendIndent(2, $"private readonly Mikodev.Binary.Converter<{GetTypeAlias(i.Type)}> _cvt_{i.Index};");
+            builder.AppendIndent(2);
+            cancellation.ThrowIfCancellationRequested();
+        }
+
+        builder.AppendIndent(2, $"public {outputConverterName}(");
+        for (var i = 0; i < members.Count; i++)
+        {
+            var member = members[i];
+            var tail = (i == members.Count - 1) ? ")" : ",";
+            builder.AppendIndent(3, $"Mikodev.Binary.Converter<{GetTypeAlias(member.Type)}> _arg_{member.Index}{tail}");
+            cancellation.ThrowIfCancellationRequested();
+        }
+        builder.AppendIndent(2, $"{{");
+        for (var i = 0; i < members.Count; i++)
+        {
+            builder.AppendIndent(3, $"this._cvt_{i} = _arg_{i};");
+            cancellation.ThrowIfCancellationRequested();
+        }
+        builder.AppendIndent(2, $"}}");
+        builder.AppendIndent(2);
+
+        builder.AppendIndent(2, $"public override void Encode(ref Mikodev.Binary.Allocator allocator, {typeAlias} item)");
+        builder.AppendIndent(2, $"{{");
+        for (var i = 0; i < members.Count; i++)
+        {
+            var member = members[i];
+            var method = (i == members.Count - 1) ? "Encode" : "EncodeAuto";
+            builder.AppendIndent(3, $"this._cvt_{i}.{method}(ref allocator, item.{member.Name});");
+            cancellation.ThrowIfCancellationRequested();
+        }
+        builder.AppendIndent(2, $"}}");
+        builder.AppendIndent(2);
+
+        builder.AppendIndent(2, $"public override void EncodeAuto(ref Mikodev.Binary.Allocator allocator, {typeAlias} item)");
+        builder.AppendIndent(2, $"{{");
+        for (var i = 0; i < members.Count; i++)
+        {
+            var member = members[i];
+            builder.AppendIndent(3, $"this._cvt_{i}.EncodeAuto(ref allocator, item.{member.Name});");
+            cancellation.ThrowIfCancellationRequested();
+        }
+        builder.AppendIndent(2, $"}}");
+        builder.AppendIndent(2);
+
+        builder.AppendIndent(2, $"public override {typeAlias} Decode(in System.ReadOnlySpan<byte> span)");
+        builder.AppendIndent(2, $"{{");
+        builder.AppendIndent(3, $"var body = span;");
+        for (var i = 0; i < members.Count; i++)
+        {
+            var last = (i == members.Count - 1);
+            var method = last ? "Decode" : "DecodeAuto";
+            var keyword = last ? "in" : "ref";
+            builder.AppendIndent(3, $"var _var_{i} = this._cvt_{i}.{method}({keyword} body);");
+            cancellation.ThrowIfCancellationRequested();
+        }
+        builder.AppendIndent(3, $"var result = new {typeAlias}()");
+        builder.AppendIndent(3, $"{{");
+        for (var i = 0; i < members.Count; i++)
+        {
+            var member = members[i];
+            builder.AppendIndent(4, $"{member.Name} = _var_{i},");
+            cancellation.ThrowIfCancellationRequested();
+        }
+        builder.AppendIndent(3, $"}};");
+        builder.AppendIndent(3, $"return result;");
+        builder.AppendIndent(2, $"}}");
+        builder.AppendIndent(2);
+
+        builder.AppendIndent(2, $"public override {typeAlias} DecodeAuto(ref System.ReadOnlySpan<byte> span)");
+        builder.AppendIndent(2, $"{{");
+        for (var i = 0; i < members.Count; i++)
+        {
+            builder.AppendIndent(3, $"var _var_{i} = this._cvt_{i}.DecodeAuto(ref span);");
+            cancellation.ThrowIfCancellationRequested();
+        }
+        builder.AppendIndent(3, $"var result = new {typeAlias}()");
+        builder.AppendIndent(3, $"{{");
+        for (var i = 0; i < members.Count; i++)
+        {
+            var member = members[i];
+            builder.AppendIndent(4, $"{member.Name} = _var_{i},");
+            cancellation.ThrowIfCancellationRequested();
+        }
+        builder.AppendIndent(3, $"}};");
+        builder.AppendIndent(3, $"return result;");
+        builder.AppendIndent(2, $"}}");
+
+        builder.AppendIndent(1, $"}}");
+        builder.AppendIndent(0, $"}}");
+        var outputCode = builder.ToString();
+        var outputFileName = GetSafeOutputFileName(typeSymbol);
+        context.AddSource($"{outputFileName}.g.cs", outputCode);
     }
 }
