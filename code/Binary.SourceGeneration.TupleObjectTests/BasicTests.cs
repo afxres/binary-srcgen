@@ -3,8 +3,8 @@
 using Mikodev.Binary.Attributes;
 using Xunit;
 
-[SourceGenerationContext]
-public partial class TestSourceGenerationContext { }
+[SourceGeneratorContext]
+public partial class TestSourceGeneratorContext { }
 
 [TupleObject]
 public class Person

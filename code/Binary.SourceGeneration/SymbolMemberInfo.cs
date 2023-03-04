@@ -3,6 +3,8 @@
 using Microsoft.CodeAnalysis;
 using System.Diagnostics;
 
+#nullable enable
+
 public class SymbolMemberInfo
 {
     public string Name { get; }

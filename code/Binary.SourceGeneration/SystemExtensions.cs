@@ -3,6 +3,8 @@
 using System;
 using System.Text;
 
+#nullable enable
+
 public static class SystemExtensions
 {
     public static void AppendIndent(this StringBuilder builder, int indent)
