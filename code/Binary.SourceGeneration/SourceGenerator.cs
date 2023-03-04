@@ -6,6 +6,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Text;
 
 #nullable enable
 
@@ -54,21 +55,6 @@ public sealed class SourceGenerator : IIncrementalGenerator
             }
             var contextTypeName = typeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
             var contextTypeNamespace = @namespace.ToDisplayString();
-            var output =
-                $$"""
-                namespace {{contextTypeNamespace}};
-
-                using System;
-                using System.Collections.Concurrent;
-
-                partial class {{contextTypeName}}
-                {
-                    private readonly ConcurrentDictionary<Type, Mikodev.Binary.IConverterCreator> creators = new();
-                }
-
-                """;
-            var fileName = StaticExtensions.GetSafeOutputFileName(typeSymbol);
-            context.AddSource($"{fileName}.g.cs", output);
 
             var includedTypes = new List<INamedTypeSymbol>();
             var attributes = typeSymbol.GetAttributes();
@@ -85,7 +71,7 @@ public sealed class SourceGenerator : IIncrementalGenerator
                 includedTypes.Add(includedType);
             }
 
-            var sourceGeneratorContext = new SourceGeneratorContext { Name = contextTypeName, Namespace = contextTypeNamespace };
+            var sourceGeneratorContext = new SourceGeneratorContext(contextTypeName, contextTypeNamespace);
             var tupleObjectSymbol = compilation.GetTypeByMetadataName(StaticExtensions.TupleObjectAttributeTypeName);
             foreach (var type in includedTypes)
             {
@@ -94,6 +80,27 @@ public sealed class SourceGenerator : IIncrementalGenerator
                     new TupleConverterContext(sourceGeneratorContext, type, context).Invoke();
                 }
             }
+
+            var builder = new StringBuilder();
+            const string CreatorsCollectionType = $"System.Collections.Generic.List<{StaticExtensions.IConverterCreatorTypeName}>";
+            const string CreatorsCollectionInterfaceType = $"System.Collections.Generic.IEnumerable<{StaticExtensions.IConverterCreatorTypeName}>";
+            builder.AppendIndent(0, $"namespace {contextTypeNamespace};");
+            builder.AppendIndent(0);
+            builder.AppendIndent(0, $"partial class {contextTypeName}");
+            builder.AppendIndent(0, $"{{");
+            builder.AppendIndent(1, $"public static {CreatorsCollectionInterfaceType} creators {{ get; }} = new {CreatorsCollectionType}()");
+            builder.AppendIndent(1, $"{{");
+            foreach (var i in sourceGeneratorContext.ConverterCreators)
+            {
+                builder.AppendIndent(2, $"new {i}(),");
+                context.CancellationToken.ThrowIfCancellationRequested();
+            }
+            builder.AppendIndent(1, $"}};");
+            builder.AppendIndent(0, $"}}");
+            builder.AppendIndent(0);
+            var output = builder.ToString();
+            var fileName = StaticExtensions.GetSafeOutputFileName(typeSymbol);
+            context.AddSource($"{fileName}.g.cs", output);
         }
     }
 }

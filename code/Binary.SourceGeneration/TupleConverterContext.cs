@@ -17,22 +17,26 @@ public class TupleConverterContext
 
     private readonly SourceGeneratorContext sourceGeneratorContext;
 
-    private readonly Dictionary<string, string> typeAliases = new Dictionary<string, string>();
+    private readonly SortedDictionary<string, string> typeAliases = new SortedDictionary<string, string>(StringComparer.Ordinal);
 
     private int typeAliasIndex = 0;
-
-    private readonly StringBuilder builder = new StringBuilder();
 
     private List<SymbolMemberInfo> members;
 
     private string typeAlias;
+
+    private string outputConverterName;
+
+    private string outputConverterFileNamePrefix;
 
     private string GetTypeAlias(ITypeSymbol type)
     {
         var typeFullName = type.ToDisplayString(StaticExtensions.FullyQualifiedFormatNoSpecialTypes);
         if (this.typeAliases.TryGetValue(typeFullName, out var result))
             return result;
-        var typeAlias = $"_T_{this.typeAliasIndex++}";
+        var typeAlias = SymbolEqualityComparer.Default.Equals(type, this.namedTypeSymbol)
+            ? $"_TSelf"
+            : $"_T{this.typeAliasIndex++}";
         this.typeAliases.Add(typeFullName, typeAlias);
         return typeAlias;
     }
@@ -52,67 +56,41 @@ public class TupleConverterContext
     public void Invoke()
     {
         ThrowIfCancelled();
-
         var sharedIndex = new StrongBox<int> { Value = 0 };
         var members = this.namedTypeSymbol.GetMembers().Select(x => StaticExtensions.GetPublicFiledOrProperty(x, sharedIndex)).OfType<SymbolMemberInfo>().OrderBy(x => x.Index).ToList();
         foreach (var i in members)
             _ = GetTypeAlias(i.Type);
         this.members = members;
         this.typeAlias = GetTypeAlias(this.namedTypeSymbol);
-        var builder = this.builder;
-        var outputConverterName = $"{StaticExtensions.GetSafePartTypeName(this.namedTypeSymbol)}__Converter";
-        builder.AppendIndent(0, $"namespace {this.sourceGeneratorContext.Namespace};");
-        builder.AppendIndent(0);
-        foreach (var i in this.typeAliases)
-            builder.AppendIndent(0, $"using {i.Value} = {i.Key};");
-        builder.AppendIndent(0);
+        this.outputConverterName = $"{StaticExtensions.GetSafePartTypeName(this.namedTypeSymbol)}__Converter";
+        this.outputConverterFileNamePrefix = $"{StaticExtensions.GetSafeOutputFileName(this.namedTypeSymbol)}Converter";
+        AppendConverter();
+        AppendConverterCreator();
+    }
 
-        builder.AppendIndent(0, $"partial class {this.sourceGeneratorContext.Name}");
-        builder.AppendIndent(0, $"{{");
-        builder.AppendIndent(1, $"public class {outputConverterName} : {StaticExtensions.ConverterTypeName}<{this.typeAlias}>");
-        builder.AppendIndent(1, $"{{");
-        foreach (var i in members)
-        {
-            builder.AppendIndent(2, $"private readonly Mikodev.Binary.Converter<{GetTypeAlias(i.Type)}> _cvt_{i.Index};");
-            builder.AppendIndent(2);
-            ThrowIfCancelled();
-        }
-
-        builder.AppendIndent(2, $"public {outputConverterName}(");
+    private void AppendConstructor(StringBuilder builder)
+    {
+        var members = this.members;
+        builder.AppendIndent(2, $"public {this.outputConverterName}(");
         for (var i = 0; i < members.Count; i++)
         {
+            var last = (i == members.Count - 1);
+            var tail = last ? ")" : ",";
             var member = members[i];
-            var tail = (i == members.Count - 1) ? ")" : ",";
-            builder.AppendIndent(3, $"Mikodev.Binary.Converter<{GetTypeAlias(member.Type)}> _arg_{member.Index}{tail}");
+            builder.AppendIndent(3, $"{StaticExtensions.ConverterTypeName}<{GetTypeAlias(member.Type)}> _arg{member.Index}{tail}");
             ThrowIfCancelled();
         }
         builder.AppendIndent(2, $"{{");
         for (var i = 0; i < members.Count; i++)
         {
-            builder.AppendIndent(3, $"this._cvt_{i} = _arg_{i};");
+            builder.AppendIndent(3, $"this._cvt{i} = _arg{i};");
             ThrowIfCancelled();
         }
         builder.AppendIndent(2, $"}}");
-        builder.AppendIndent(2);
-
-        AppendEncodeMethod(auto: false);
-        builder.AppendIndent(2);
-        AppendEncodeMethod(auto: true);
-        builder.AppendIndent(2);
-        AppendDecodeMethod(auto: false);
-        builder.AppendIndent(2);
-        AppendDecodeMethod(auto: true);
-
-        builder.AppendIndent(1, $"}}");
-        builder.AppendIndent(0, $"}}");
-        var outputCode = builder.ToString();
-        var outputFileName = StaticExtensions.GetSafeOutputFileName(this.namedTypeSymbol);
-        this.sourceProductionContext.AddSource($"{outputFileName}.g.cs", outputCode);
     }
 
-    private void AppendEncodeMethod(bool auto)
+    private void AppendEncodeMethod(StringBuilder builder, bool auto)
     {
-        var builder = this.builder;
         var members = this.members;
         var methodName = auto ? "EncodeAuto" : "Encode";
         builder.AppendIndent(2, $"public override void {methodName}(ref {StaticExtensions.AllocatorTypeName} allocator, {this.typeAlias} item)");
@@ -122,15 +100,14 @@ public class TupleConverterContext
             var last = (i == members.Count - 1);
             var member = members[i];
             var method = (auto || last is false) ? "EncodeAuto" : "Encode";
-            builder.AppendIndent(3, $"this._cvt_{i}.{method}(ref allocator, item.{member.Name});");
+            builder.AppendIndent(3, $"this._cvt{i}.{method}(ref allocator, item.{member.Name});");
             ThrowIfCancelled();
         }
         builder.AppendIndent(2, $"}}");
     }
 
-    private void AppendDecodeMethod(bool auto)
+    private void AppendDecodeMethod(StringBuilder builder, bool auto)
     {
-        var builder = this.builder;
         var members = this.members;
         var modifier = auto ? "ref" : "in";
         var methodName = auto ? "DecodeAuto" : "Decode";
@@ -144,7 +121,7 @@ public class TupleConverterContext
             var last = (i == members.Count - 1);
             var method = (auto || last is false) ? "DecodeAuto" : "Decode";
             var keyword = (auto is false && last) ? "in" : "ref";
-            builder.AppendIndent(3, $"var _var_{i} = this._cvt_{i}.{method}({keyword} {bufferName});");
+            builder.AppendIndent(3, $"var _var{i} = this._cvt{i}.{method}({keyword} {bufferName});");
             ThrowIfCancelled();
         }
         builder.AppendIndent(3, $"var result = new {this.typeAlias}()");
@@ -152,11 +129,94 @@ public class TupleConverterContext
         for (var i = 0; i < members.Count; i++)
         {
             var member = members[i];
-            builder.AppendIndent(4, $"{member.Name} = _var_{i},");
+            builder.AppendIndent(4, $"{member.Name} = _var{i},");
             ThrowIfCancelled();
         }
         builder.AppendIndent(3, $"}};");
         builder.AppendIndent(3, $"return result;");
         builder.AppendIndent(2, $"}}");
+    }
+
+    private void AppendConverter()
+    {
+        var builder = new StringBuilder();
+        var members = this.members;
+        builder.AppendIndent(0, $"namespace {this.sourceGeneratorContext.Namespace};");
+        builder.AppendIndent(0);
+        foreach (var i in this.typeAliases)
+            builder.AppendIndent(0, $"using {i.Value} = {i.Key};");
+        builder.AppendIndent(0);
+
+        builder.AppendIndent(0, $"partial class {this.sourceGeneratorContext.Name}");
+        builder.AppendIndent(0, $"{{");
+        builder.AppendIndent(1, $"public class {this.outputConverterName} : {StaticExtensions.ConverterTypeName}<{this.typeAlias}>");
+        builder.AppendIndent(1, $"{{");
+        foreach (var i in members)
+        {
+            builder.AppendIndent(2, $"private readonly {StaticExtensions.ConverterTypeName}<{GetTypeAlias(i.Type)}> _cvt{i.Index};");
+            builder.AppendIndent(2);
+            ThrowIfCancelled();
+        }
+
+        AppendConstructor(builder);
+        builder.AppendIndent(2);
+        AppendEncodeMethod(builder, auto: false);
+        builder.AppendIndent(2);
+        AppendEncodeMethod(builder, auto: true);
+        builder.AppendIndent(2);
+        AppendDecodeMethod(builder, auto: false);
+        builder.AppendIndent(2);
+        AppendDecodeMethod(builder, auto: true);
+
+        builder.AppendIndent(1, $"}}");
+        builder.AppendIndent(0, $"}}");
+        var outputCode = builder.ToString();
+        var outputFileName = $"{this.outputConverterFileNamePrefix}.g.cs";
+        this.sourceProductionContext.AddSource(outputFileName, outputCode);
+    }
+
+    private void AppendConverterCreator()
+    {
+        var builder = new StringBuilder();
+        var members = this.members;
+        builder.AppendIndent(0, $"namespace {this.sourceGeneratorContext.Namespace};");
+        builder.AppendIndent(0);
+        foreach (var i in this.typeAliases)
+            builder.AppendIndent(0, $"using {i.Value} = {i.Key};");
+        builder.AppendIndent(0);
+
+        var outputConverterCreatorName = $"{this.outputConverterName}Creator";
+        builder.AppendIndent(0, $"partial class {this.sourceGeneratorContext.Name}");
+        builder.AppendIndent(0, $"{{");
+        builder.AppendIndent(1, $"public class {outputConverterCreatorName} : {StaticExtensions.IConverterCreatorTypeName}");
+        builder.AppendIndent(1, $"{{");
+
+        builder.AppendIndent(2, $"public {StaticExtensions.IConverterTypeName} GetConverter({StaticExtensions.IGeneratorContextTypeName} context, System.Type type)");
+        builder.AppendIndent(2, $"{{");
+        builder.AppendIndent(3, $"if (type != typeof({this.typeAlias}))");
+        builder.AppendIndent(4, $"return null;");
+        foreach (var i in members)
+        {
+            var alias = GetTypeAlias(i.Type);
+            builder.AppendIndent(3, $"var _cvt{i.Index} = ({StaticExtensions.ConverterTypeName}<{alias}>)context.GetConverter(typeof({alias}));");
+            ThrowIfCancelled();
+        }
+
+        builder.AppendIndent(3, $"var converter = new {this.outputConverterName}(");
+        for (var i = 0; i < members.Count; i++)
+        {
+            var last = (i == members.Count - 1);
+            var tail = last ? ");" : ",";
+            builder.AppendIndent(4, $"_cvt{i}{tail}");
+        }
+        builder.AppendIndent(3, $"return ({StaticExtensions.IConverterTypeName})converter;");
+        builder.AppendIndent(2, $"}}");
+
+        builder.AppendIndent(1, $"}}");
+        builder.AppendIndent(0, $"}}");
+        var outputCode = builder.ToString();
+        var outputFileName = $"{this.outputConverterFileNamePrefix}Creator.g.cs";
+        this.sourceProductionContext.AddSource(outputFileName, outputCode);
+        this.sourceGeneratorContext.AddConverterCreator(outputConverterCreatorName);
     }
 }

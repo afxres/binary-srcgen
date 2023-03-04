@@ -40,6 +40,12 @@ public static class StaticExtensions
 
     public const string ConverterTypeName = "Mikodev.Binary.Converter";
 
+    public const string IConverterTypeName = "Mikodev.Binary.IConverter";
+
+    public const string IConverterCreatorTypeName = "Mikodev.Binary.IConverterCreator";
+
+    public const string IGeneratorContextTypeName = "Mikodev.Binary.IGeneratorContext";
+
     public const string DiagnosticCategory = "Mikodev.Binary.SourceGeneration";
 
     public static DiagnosticDescriptor ContextTypeMustBePartial { get; } = new DiagnosticDescriptor(
