@@ -3,7 +3,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 
@@ -12,31 +12,25 @@ using System.Linq;
 [Generator]
 public sealed class SourceGenerator : IIncrementalGenerator
 {
-    private SourceGeneratorContext? sourceGeneratorContext;
-
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         context.RegisterPostInitializationOutput(x => x.AddSource("__SourceGeneratorContextAttribute.g.cs", StaticExtensions.SourceGeneratorContextAttribute));
         context.RegisterPostInitializationOutput(x => x.AddSource("__SourceGeneratorIncludeAttribute.g.cs", StaticExtensions.SourceGeneratorIncludeAttribute));
-        Register(context, StaticExtensions.SourceGeneratorContextAttributeTypeName, GetOutputContextType);
-        Register(context, StaticExtensions.TupleObjectAttributeTypeName, GetTupleObjectConverters);
-    }
 
-    private void Register(IncrementalGeneratorInitializationContext context, string attributeName, Action<Compilation, ImmutableArray<TypeDeclarationSyntax>, SourceProductionContext> func)
-    {
         var declarations = context.SyntaxProvider.ForAttributeWithMetadataName(
-            attributeName,
+            StaticExtensions.SourceGeneratorContextAttributeTypeName,
             (node, _) => node is TypeDeclarationSyntax,
             (context, _) => (TypeDeclarationSyntax)context.TargetNode);
         var provider = context.CompilationProvider.Combine(declarations.Collect());
-        context.RegisterSourceOutput(provider, (context, source) => func.Invoke(source.Left, source.Right, context));
+        context.RegisterSourceOutput(provider, (context, source) => Invoke(source.Left, source.Right, context));
     }
 
-    private void GetOutputContextType(Compilation compilation, ImmutableArray<TypeDeclarationSyntax> nodes, SourceProductionContext context)
+    private void Invoke(Compilation compilation, ImmutableArray<TypeDeclarationSyntax> nodes, SourceProductionContext context)
     {
         if (nodes.IsDefaultOrEmpty)
             return;
         var contextAttributeSymbol = compilation.GetTypeByMetadataName(StaticExtensions.SourceGeneratorContextAttributeTypeName);
+        var includeAttributeSymbol = compilation.GetTypeByMetadataName(StaticExtensions.SourceGeneratorIncludeAttributeTypeName)?.ConstructUnboundGenericType();
         foreach (var node in nodes)
         {
             var syntaxTree = node.SyntaxTree;
@@ -64,36 +58,41 @@ public sealed class SourceGenerator : IIncrementalGenerator
                 $$"""
                 namespace {{contextTypeNamespace}};
 
+                using System;
+                using System.Collections.Concurrent;
+
                 partial class {{contextTypeName}}
                 {
-                    private readonly System.Collections.Concurrent.ConcurrentDictionary<System.Type, Mikodev.Binary.IConverterCreator> creators = new();
+                    private readonly ConcurrentDictionary<Type, Mikodev.Binary.IConverterCreator> creators = new();
                 }
 
                 """;
             var fileName = StaticExtensions.GetSafeOutputFileName(typeSymbol);
             context.AddSource($"{fileName}.g.cs", output);
-            this.sourceGeneratorContext = new SourceGeneratorContext { Name = contextTypeName, Namespace = contextTypeNamespace };
-        }
-    }
 
-    public void GetTupleObjectConverters(Compilation compilation, ImmutableArray<TypeDeclarationSyntax> nodes, SourceProductionContext context)
-    {
-        if (this.sourceGeneratorContext is null)
-            return;
-        if (nodes.IsDefaultOrEmpty)
-            return;
-        var tupleObjectSymbol = compilation.GetTypeByMetadataName(StaticExtensions.TupleObjectAttributeTypeName);
-        foreach (var node in nodes)
-        {
-            var syntaxTree = node.SyntaxTree;
-            var semanticModel = compilation.GetSemanticModel(syntaxTree);
-            var typeSymbol = semanticModel.GetDeclaredSymbol(node);
-            if (typeSymbol is null)
-                continue;
+            var includedTypes = new List<INamedTypeSymbol>();
             var attributes = typeSymbol.GetAttributes();
-            if (attributes.Any(x => SymbolEqualityComparer.Default.Equals(x.AttributeClass, tupleObjectSymbol)))
+            foreach (var i in attributes)
             {
-                new TupleConverterContext(this.sourceGeneratorContext, typeSymbol, context).Invoke();
+                var attribute = i.AttributeClass;
+                if (attribute is null || attribute.IsGenericType is false)
+                    continue;
+                var definitions = attribute.ConstructUnboundGenericType();
+                if (SymbolEqualityComparer.Default.Equals(definitions, includeAttributeSymbol) is false)
+                    continue;
+                if (attribute.TypeArguments.Single() is not INamedTypeSymbol includedType)
+                    continue;
+                includedTypes.Add(includedType);
+            }
+
+            var sourceGeneratorContext = new SourceGeneratorContext { Name = contextTypeName, Namespace = contextTypeNamespace };
+            var tupleObjectSymbol = compilation.GetTypeByMetadataName(StaticExtensions.TupleObjectAttributeTypeName);
+            foreach (var type in includedTypes)
+            {
+                if (type.GetAttributes().Any(x => SymbolEqualityComparer.Default.Equals(x.AttributeClass, tupleObjectSymbol)))
+                {
+                    new TupleConverterContext(sourceGeneratorContext, type, context).Invoke();
+                }
             }
         }
     }

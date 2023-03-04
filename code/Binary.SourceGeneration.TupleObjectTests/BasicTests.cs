@@ -4,6 +4,7 @@ using Mikodev.Binary.Attributes;
 using Xunit;
 
 [SourceGeneratorContext]
+[SourceGeneratorInclude<Person>]
 public partial class TestSourceGeneratorContext { }
 
 [TupleObject]

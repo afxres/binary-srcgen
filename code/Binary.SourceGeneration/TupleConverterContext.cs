@@ -96,8 +96,11 @@ public class TupleConverterContext
         builder.AppendIndent(2);
 
         AppendEncodeMethod(auto: false);
+        builder.AppendIndent(2);
         AppendEncodeMethod(auto: true);
+        builder.AppendIndent(2);
         AppendDecodeMethod(auto: false);
+        builder.AppendIndent(2);
         AppendDecodeMethod(auto: true);
 
         builder.AppendIndent(1, $"}}");
@@ -123,7 +126,6 @@ public class TupleConverterContext
             ThrowIfCancelled();
         }
         builder.AppendIndent(2, $"}}");
-        builder.AppendIndent(2);
     }
 
     private void AppendDecodeMethod(bool auto)
@@ -156,6 +158,5 @@ public class TupleConverterContext
         builder.AppendIndent(3, $"}};");
         builder.AppendIndent(3, $"return result;");
         builder.AppendIndent(2, $"}}");
-        builder.AppendIndent(2);
     }
 }
