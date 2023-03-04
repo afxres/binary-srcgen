@@ -17,6 +17,7 @@ public sealed class SourceGenerator : IIncrementalGenerator
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         context.RegisterPostInitializationOutput(x => x.AddSource("__SourceGeneratorContextAttribute.g.cs", StaticExtensions.SourceGeneratorContextAttribute));
+        context.RegisterPostInitializationOutput(x => x.AddSource("__SourceGeneratorIncludeAttribute.g.cs", StaticExtensions.SourceGeneratorIncludeAttribute));
         Register(context, StaticExtensions.SourceGeneratorContextAttributeTypeName, GetOutputContextType);
         Register(context, StaticExtensions.TupleObjectAttributeTypeName, GetTupleObjectConverters);
     }
