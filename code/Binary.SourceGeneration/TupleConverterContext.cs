@@ -12,23 +12,23 @@ public class TupleConverterContext
 {
     private readonly INamedTypeSymbol namedTypeSymbol;
 
-    private readonly SourceProductionContext sourceProductionContext;
+    private readonly SourceProductionContext productionContext;
 
-    private readonly SourceGeneratorContext sourceGeneratorContext;
+    private readonly SourceGeneratorContext generatorContext;
 
     private readonly SortedDictionary<string, string> typeAliases = new SortedDictionary<string, string>(StringComparer.Ordinal);
 
     private int typeAliasIndex = 0;
 
-    private List<SymbolMemberInfo> members;
+    private readonly List<SymbolMemberInfo> members;
 
-    private string typeAlias;
+    private readonly string typeAlias;
 
-    private string outputConverterName;
+    private readonly string outputConverterName;
 
-    private string outputConverterFileNamePrefix;
+    private readonly string outputConverterFileNamePrefix;
 
-    private INamedTypeSymbol? tupleKeyAttributeSymbol;
+    private readonly INamedTypeSymbol? tupleKeyAttributeSymbol;
 
     private string GetTypeAlias(ITypeSymbol type)
     {
@@ -44,10 +44,10 @@ public class TupleConverterContext
 
     private void ThrowIfCancelled()
     {
-        this.sourceProductionContext.CancellationToken.ThrowIfCancellationRequested();
+        this.productionContext.CancellationToken.ThrowIfCancellationRequested();
     }
 
-    private SymbolMemberInfo? GetPublicFiledOrProperty(ISymbol symbol)
+    private SymbolMemberInfo? GetMember(ISymbol symbol)
     {
         if (symbol.DeclaredAccessibility is not Accessibility.Public)
             return null;
@@ -62,26 +62,19 @@ public class TupleConverterContext
         return null;
     }
 
-    public TupleConverterContext(SourceGeneratorContext sourceGeneratorContext, INamedTypeSymbol namedTypeSymbol)
+    private TupleConverterContext(SourceGeneratorContext context, INamedTypeSymbol symbol)
     {
-        this.sourceGeneratorContext = sourceGeneratorContext ?? throw new ArgumentNullException(nameof(sourceGeneratorContext));
-        this.namedTypeSymbol = namedTypeSymbol ?? throw new ArgumentNullException(nameof(namedTypeSymbol));
-        this.sourceProductionContext = sourceGeneratorContext.SourceProductionContext;
-    }
-
-    public void Invoke()
-    {
-        ThrowIfCancelled();
-        this.tupleKeyAttributeSymbol = this.sourceGeneratorContext.Compilation.GetTypeByMetadataName(StaticExtensions.TupleKeyAttributeTypeName);
-        var members = this.namedTypeSymbol.GetMembers().Select(GetPublicFiledOrProperty).OfType<SymbolMemberInfo>().OrderBy(x => x.Index).ToList();
+        this.generatorContext = context ?? throw new ArgumentNullException(nameof(context));
+        this.namedTypeSymbol = symbol ?? throw new ArgumentNullException(nameof(symbol));
+        this.productionContext = context.SourceProductionContext;
+        this.tupleKeyAttributeSymbol = this.generatorContext.Compilation.GetTypeByMetadataName(StaticExtensions.TupleKeyAttributeTypeName);
+        var members = this.namedTypeSymbol.GetMembers().Select(GetMember).OfType<SymbolMemberInfo>().OrderBy(x => x.Index).ToList();
         foreach (var i in members)
             _ = GetTypeAlias(i.Type);
         this.members = members;
         this.typeAlias = GetTypeAlias(this.namedTypeSymbol);
         this.outputConverterName = $"{StaticExtensions.GetSafePartTypeName(this.namedTypeSymbol)}__Converter";
         this.outputConverterFileNamePrefix = $"{StaticExtensions.GetSafeOutputFileName(this.namedTypeSymbol)}Converter";
-        AppendConverter();
-        AppendConverterCreator();
     }
 
     private void AppendConstructor(StringBuilder builder)
@@ -157,13 +150,13 @@ public class TupleConverterContext
     {
         var builder = new StringBuilder();
         var members = this.members;
-        builder.AppendIndent(0, $"namespace {this.sourceGeneratorContext.Namespace};");
+        builder.AppendIndent(0, $"namespace {this.generatorContext.Namespace};");
         builder.AppendIndent(0);
         foreach (var i in this.typeAliases)
             builder.AppendIndent(0, $"using {i.Value} = {i.Key};");
         builder.AppendIndent(0);
 
-        builder.AppendIndent(0, $"partial class {this.sourceGeneratorContext.Name}");
+        builder.AppendIndent(0, $"partial class {this.generatorContext.Name}");
         builder.AppendIndent(0, $"{{");
         builder.AppendIndent(1, $"public class {this.outputConverterName} : {StaticExtensions.ConverterTypeName}<{this.typeAlias}>");
         builder.AppendIndent(1, $"{{");
@@ -188,21 +181,21 @@ public class TupleConverterContext
         builder.AppendIndent(0, $"}}");
         var outputCode = builder.ToString();
         var outputFileName = $"{this.outputConverterFileNamePrefix}.g.cs";
-        this.sourceProductionContext.AddSource(outputFileName, outputCode);
+        this.productionContext.AddSource(outputFileName, outputCode);
     }
 
     private void AppendConverterCreator()
     {
         var builder = new StringBuilder();
         var members = this.members;
-        builder.AppendIndent(0, $"namespace {this.sourceGeneratorContext.Namespace};");
+        builder.AppendIndent(0, $"namespace {this.generatorContext.Namespace};");
         builder.AppendIndent(0);
         foreach (var i in this.typeAliases)
             builder.AppendIndent(0, $"using {i.Value} = {i.Key};");
         builder.AppendIndent(0);
 
         var outputConverterCreatorName = $"{this.outputConverterName}Creator";
-        builder.AppendIndent(0, $"partial class {this.sourceGeneratorContext.Name}");
+        builder.AppendIndent(0, $"partial class {this.generatorContext.Name}");
         builder.AppendIndent(0, $"{{");
         builder.AppendIndent(1, $"public class {outputConverterCreatorName} : {StaticExtensions.IConverterCreatorTypeName}");
         builder.AppendIndent(1, $"{{");
@@ -232,7 +225,14 @@ public class TupleConverterContext
         builder.AppendIndent(0, $"}}");
         var outputCode = builder.ToString();
         var outputFileName = $"{this.outputConverterFileNamePrefix}Creator.g.cs";
-        this.sourceProductionContext.AddSource(outputFileName, outputCode);
-        this.sourceGeneratorContext.AddConverterCreator(outputConverterCreatorName);
+        this.productionContext.AddSource(outputFileName, outputCode);
+        this.generatorContext.AddConverterCreator(outputConverterCreatorName);
+    }
+
+    public static void Invoke(SourceGeneratorContext context, INamedTypeSymbol symbol)
+    {
+        var closure = new TupleConverterContext(context, symbol);
+        closure.AppendConverter();
+        closure.AppendConverterCreator();
     }
 }

@@ -80,7 +80,7 @@ public sealed class SourceGenerator : IIncrementalGenerator
             {
                 if (type.GetAttributes().Any(x => SymbolEqualityComparer.Default.Equals(x.AttributeClass, tupleObjectSymbol)))
                 {
-                    new TupleConverterContext(sourceGeneratorContext, type).Invoke();
+                    TupleConverterContext.Invoke(sourceGeneratorContext, type);
                 }
             }
 
