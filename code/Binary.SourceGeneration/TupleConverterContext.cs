@@ -3,6 +3,7 @@
 using Microsoft.CodeAnalysis;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
 
@@ -10,6 +11,8 @@ using System.Text;
 
 public class TupleConverterContext
 {
+    private static readonly ImmutableArray<string> SystemTupleMemberNames = ImmutableArray.Create(new[] { "Item1", "Item2", "Item3", "Item4", "Item5", "Item6", "Item7", "Rest" });
+
     private readonly INamedTypeSymbol namedTypeSymbol;
 
     private readonly SourceProductionContext productionContext;
@@ -26,13 +29,9 @@ public class TupleConverterContext
 
     private readonly string outputConverterName;
 
-    private readonly string outputConverterFileNamePrefix;
-
-    private readonly INamedTypeSymbol? tupleKeyAttributeSymbol;
-
     private string GetTypeAlias(ITypeSymbol type)
     {
-        var typeFullName = type.ToDisplayString(StaticExtensions.FullyQualifiedFormatNoSpecialTypes);
+        var typeFullName = StaticExtensions.GetFullName(type);
         if (this.typeAliases.TryGetValue(typeFullName, out var result))
             return result;
         var typeAlias = SymbolEqualityComparer.Default.Equals(type, this.namedTypeSymbol)
@@ -47,34 +46,55 @@ public class TupleConverterContext
         this.productionContext.CancellationToken.ThrowIfCancellationRequested();
     }
 
-    private SymbolMemberInfo? GetMember(ISymbol symbol)
+    private SymbolMemberInfo? GetMember(ISymbol member)
     {
-        if (symbol.DeclaredAccessibility is not Accessibility.Public)
+        if (member.DeclaredAccessibility is not Accessibility.Public)
             return null;
-        var attributes = symbol.GetAttributes();
-        var attribute = attributes.FirstOrDefault(x => SymbolEqualityComparer.Default.Equals(x.AttributeClass, this.tupleKeyAttributeSymbol));
+        var attributes = member.GetAttributes();
+        var attribute = attributes.FirstOrDefault(x => SymbolEqualityComparer.Default.Equals(x.AttributeClass, this.generatorContext.TupleKeyAttributeTypeSymbol));
         if (attribute is null || attribute.ConstructorArguments.FirstOrDefault().Value is not int index)
             return null;
-        if (symbol is IFieldSymbol fieldSymbol)
+        if (member is IFieldSymbol fieldSymbol)
             return new SymbolMemberInfo(SymbolMemberType.Field, fieldSymbol.Name, fieldSymbol.IsReadOnly, fieldSymbol.Type, index);
-        if (symbol is IPropertySymbol propertySymbol)
+        if (member is IPropertySymbol propertySymbol)
             return new SymbolMemberInfo(SymbolMemberType.Property, propertySymbol.Name, propertySymbol.IsReadOnly, propertySymbol.Type, index);
         return null;
     }
 
-    private TupleConverterContext(SourceGeneratorContext context, INamedTypeSymbol symbol)
+    private List<SymbolMemberInfo> GetCustomTupleMembers(INamedTypeSymbol symbol)
+    {
+        return symbol.GetMembers().Select(GetMember).OfType<SymbolMemberInfo>().OrderBy(x => x.Index).ToList();
+    }
+
+    private List<SymbolMemberInfo> GetSystemTupleMembers(INamedTypeSymbol symbol)
+    {
+        var members = symbol.GetMembers();
+        var result = new List<SymbolMemberInfo>();
+        foreach (var member in members)
+        {
+            var index = SystemTupleMemberNames.IndexOf(member.Name);
+            if (index is -1)
+                continue;
+            if (member is IFieldSymbol fieldSymbol)
+                result.Add(new SymbolMemberInfo(SymbolMemberType.Field, fieldSymbol.Name, fieldSymbol.IsReadOnly, fieldSymbol.Type, index));
+            if (member is IPropertySymbol propertySymbol)
+                result.Add(new SymbolMemberInfo(SymbolMemberType.Property, propertySymbol.Name, propertySymbol.IsReadOnly, propertySymbol.Type, index));
+        }
+        return result;
+    }
+
+    private TupleConverterContext(SourceGeneratorContext context, INamedTypeSymbol symbol, bool systemTuple)
     {
         this.generatorContext = context ?? throw new ArgumentNullException(nameof(context));
         this.namedTypeSymbol = symbol ?? throw new ArgumentNullException(nameof(symbol));
         this.productionContext = context.SourceProductionContext;
-        this.tupleKeyAttributeSymbol = this.generatorContext.Compilation.GetTypeByMetadataName(StaticExtensions.TupleKeyAttributeTypeName);
-        var members = this.namedTypeSymbol.GetMembers().Select(GetMember).OfType<SymbolMemberInfo>().OrderBy(x => x.Index).ToList();
+        var targetName = StaticExtensions.GetSafeTargetTypeName(this.namedTypeSymbol);
+        var members = systemTuple ? GetSystemTupleMembers(symbol) : GetCustomTupleMembers(symbol);
         foreach (var i in members)
             _ = GetTypeAlias(i.Type);
         this.members = members;
         this.typeAlias = GetTypeAlias(this.namedTypeSymbol);
-        this.outputConverterName = $"{StaticExtensions.GetSafePartTypeName(this.namedTypeSymbol)}__Converter";
-        this.outputConverterFileNamePrefix = $"{StaticExtensions.GetSafeOutputFileName(this.namedTypeSymbol)}Converter";
+        this.outputConverterName = $"{targetName}_Converter";
     }
 
     private void AppendConstructor(StringBuilder builder)
@@ -158,7 +178,7 @@ public class TupleConverterContext
 
         builder.AppendIndent(0, $"partial class {this.generatorContext.Name}");
         builder.AppendIndent(0, $"{{");
-        builder.AppendIndent(1, $"public class {this.outputConverterName} : {StaticExtensions.ConverterTypeName}<{this.typeAlias}>");
+        builder.AppendIndent(1, $"private sealed class {this.outputConverterName} : {StaticExtensions.ConverterTypeName}<{this.typeAlias}>");
         builder.AppendIndent(1, $"{{");
         foreach (var i in members)
         {
@@ -180,7 +200,7 @@ public class TupleConverterContext
         builder.AppendIndent(1, $"}}");
         builder.AppendIndent(0, $"}}");
         var outputCode = builder.ToString();
-        var outputFileName = $"{this.outputConverterFileNamePrefix}.g.cs";
+        var outputFileName = $"{this.outputConverterName}.g.cs";
         this.productionContext.AddSource(outputFileName, outputCode);
     }
 
@@ -197,7 +217,7 @@ public class TupleConverterContext
         var outputConverterCreatorName = $"{this.outputConverterName}Creator";
         builder.AppendIndent(0, $"partial class {this.generatorContext.Name}");
         builder.AppendIndent(0, $"{{");
-        builder.AppendIndent(1, $"public class {outputConverterCreatorName} : {StaticExtensions.IConverterCreatorTypeName}");
+        builder.AppendIndent(1, $"private sealed class {outputConverterCreatorName} : {StaticExtensions.IConverterCreatorTypeName}");
         builder.AppendIndent(1, $"{{");
 
         builder.AppendIndent(2, $"public {StaticExtensions.IConverterTypeName} GetConverter({StaticExtensions.IGeneratorContextTypeName} context, System.Type type)");
@@ -224,15 +244,19 @@ public class TupleConverterContext
         builder.AppendIndent(1, $"}}");
         builder.AppendIndent(0, $"}}");
         var outputCode = builder.ToString();
-        var outputFileName = $"{this.outputConverterFileNamePrefix}Creator.g.cs";
+        var outputFileName = $"{this.outputConverterName}Creator.g.cs";
         this.productionContext.AddSource(outputFileName, outputCode);
         this.generatorContext.AddConverterCreator(outputConverterCreatorName);
     }
 
-    public static void Invoke(SourceGeneratorContext context, INamedTypeSymbol symbol)
+    public static bool Invoke(SourceGeneratorContext context, INamedTypeSymbol symbol)
     {
-        var closure = new TupleConverterContext(context, symbol);
+        if (symbol.IsTupleType is false &&
+            symbol.GetAttributes().Any(x => SymbolEqualityComparer.Default.Equals(x.AttributeClass, context.TupleObjectAttributeTypeSymbol)) is false)
+            return false;
+        var closure = new TupleConverterContext(context, symbol, symbol.IsTupleType);
         closure.AppendConverter();
         closure.AppendConverterCreator();
+        return true;
     }
 }

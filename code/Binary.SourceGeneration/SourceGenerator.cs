@@ -3,6 +3,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -75,12 +76,19 @@ public sealed class SourceGenerator : IIncrementalGenerator
             }
 
             var sourceGeneratorContext = new SourceGeneratorContext(contextTypeName, contextTypeNamespace, compilation, context);
-            var tupleObjectSymbol = compilation.GetTypeByMetadataName(StaticExtensions.TupleObjectAttributeTypeName);
+            var handlers = new List<Func<SourceGeneratorContext, INamedTypeSymbol, bool>>
+            {
+                TupleConverterContext.Invoke,
+            };
+
             foreach (var type in includedTypes)
             {
-                if (type.GetAttributes().Any(x => SymbolEqualityComparer.Default.Equals(x.AttributeClass, tupleObjectSymbol)))
+                foreach (var h in handlers)
                 {
-                    TupleConverterContext.Invoke(sourceGeneratorContext, type);
+                    if (h.Invoke(sourceGeneratorContext, type))
+                    {
+                        break;
+                    }
                 }
             }
 
@@ -102,8 +110,8 @@ public sealed class SourceGenerator : IIncrementalGenerator
             builder.AppendIndent(0, $"}}");
             builder.AppendIndent(0);
             var output = builder.ToString();
-            var fileName = StaticExtensions.GetSafeOutputFileName(typeSymbol);
-            context.AddSource($"{fileName}.g.cs", output);
+            var targetName = StaticExtensions.GetSafeTargetTypeName(typeSymbol);
+            context.AddSource($"{targetName}.g.cs", output);
         }
     }
 }

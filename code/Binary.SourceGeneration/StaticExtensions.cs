@@ -74,37 +74,26 @@ public static class StaticExtensions
         defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true);
 
-    public static SymbolDisplayFormat FullyQualifiedFormatNoSpecialTypes { get; } =
+    public static SymbolDisplayFormat FullyQualifiedFormat { get; } =
         new SymbolDisplayFormat(
             globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
             typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
             genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
             miscellaneousOptions: SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers);
 
-    public static string GetSafeOutputFileName(INamedTypeSymbol symbol)
+    public static string GetSafeTargetTypeName(INamedTypeSymbol symbol)
     {
         const string GlobalPrefix = "global::";
-        var fullName = symbol.ToDisplayString(FullyQualifiedFormatNoSpecialTypes);
+        var fullName = GetFullName(symbol);
         var target = new StringBuilder(fullName);
         if (fullName.StartsWith(GlobalPrefix))
             _ = target.Remove(0, GlobalPrefix.Length);
-        var invalidChars = new[] { '<', '>' };
-        foreach (var @char in invalidChars)
-            _ = target.Replace(@char, '_');
-        var result = target.ToString();
-        return result;
-    }
-
-    public static string GetSafePartTypeName(INamedTypeSymbol symbol)
-    {
-        const string GlobalPrefix = "global::";
-        var fullName = symbol.ToDisplayString(FullyQualifiedFormatNoSpecialTypes);
-        var target = new StringBuilder(fullName);
-        if (fullName.StartsWith(GlobalPrefix))
-            _ = target.Remove(0, GlobalPrefix.Length);
-        var invalidChars = new[] { '<', '>', '.' };
-        foreach (var @char in invalidChars)
-            _ = target.Replace(@char, '_');
+        _ = target.Replace(GlobalPrefix, "g_");
+        _ = target.Replace(".", "_");
+        _ = target.Replace(",", "_c_");
+        _ = target.Replace(" ", "_s_");
+        _ = target.Replace("<", "_l_");
+        _ = target.Replace(">", "_r_");
         var result = target.ToString();
         return result;
     }
@@ -122,5 +111,27 @@ public static class StaticExtensions
         if (reference is not null)
             return Location.Create(reference.SyntaxTree, reference.Span);
         return Location.None;
+    }
+
+    public static string GetFullName(ITypeSymbol typeSymbol)
+    {
+        if (typeSymbol is not INamedTypeSymbol symbol || symbol.IsGenericType is false)
+            return typeSymbol.ToDisplayString(FullyQualifiedFormat);
+        var @namespace = symbol.ContainingNamespace.ToDisplayString(FullyQualifiedFormat);
+        var builder = new StringBuilder(@namespace);
+        _ = builder.Append(".");
+        _ = builder.Append(typeSymbol.Name);
+        _ = builder.Append("<");
+        var arguments = symbol.TypeArguments;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            _ = builder.Append(GetFullName(arguments[i]));
+            if (i == arguments.Length - 1)
+                break;
+            _ = builder.Append(", ");
+        }
+        _ = builder.Append(">");
+        var result = builder.ToString();
+        return result;
     }
 }
