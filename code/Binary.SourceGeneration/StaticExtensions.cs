@@ -1,7 +1,7 @@
 ﻿namespace Mikodev.Binary.SourceGeneration;
 
 using Microsoft.CodeAnalysis;
-using System.Runtime.CompilerServices;
+using System.Linq;
 using System.Text;
 
 #nullable enable
@@ -25,7 +25,7 @@ public static class StaticExtensions
 
         using System;
 
-        [AttributeUsage(AttributeTargets.Class, Inherited = false, AllowMultiple = false)]
+        [AttributeUsage(AttributeTargets.Class, Inherited = false, AllowMultiple = true)]
         internal sealed class SourceGeneratorIncludeAttribute<T> : Attribute { }
         
         """;
@@ -35,6 +35,8 @@ public static class StaticExtensions
     public const string SourceGeneratorIncludeAttributeTypeName = "Mikodev.Binary.Attributes.SourceGeneratorIncludeAttribute`1";
 
     public const string TupleObjectAttributeTypeName = "Mikodev.Binary.Attributes.TupleObjectAttribute";
+
+    public const string TupleKeyAttributeTypeName = "Mikodev.Binary.Attributes.TupleKeyAttribute";
 
     public const string AllocatorTypeName = "Mikodev.Binary.Allocator";
 
@@ -46,7 +48,7 @@ public static class StaticExtensions
 
     public const string IGeneratorContextTypeName = "Mikodev.Binary.IGeneratorContext";
 
-    public const string DiagnosticCategory = "Mikodev.Binary.SourceGeneration";
+    public const string DiagnosticCategory = "SourceGeneration";
 
     public static DiagnosticDescriptor ContextTypeMustBePartial { get; } = new DiagnosticDescriptor(
         id: "BINSRCGEN01",
@@ -63,6 +65,21 @@ public static class StaticExtensions
         category: DiagnosticCategory,
         defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true);
+
+    public static DiagnosticDescriptor IncludeTypeDuplicated { get; } = new DiagnosticDescriptor(
+        id: "BINSRCGEN03",
+        title: "Include Type Duplicated.",
+        messageFormat: "Please remove duplicated 'SourceGeneratorIncludeAttribute' for type '{0}'.",
+        category: DiagnosticCategory,
+        defaultSeverity: DiagnosticSeverity.Warning,
+        isEnabledByDefault: true);
+
+    public static SymbolDisplayFormat FullyQualifiedFormatNoSpecialTypes { get; } =
+        new SymbolDisplayFormat(
+            globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
+            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
+            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
+            miscellaneousOptions: SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers);
 
     public static string GetSafeOutputFileName(INamedTypeSymbol symbol)
     {
@@ -92,21 +109,18 @@ public static class StaticExtensions
         return result;
     }
 
-    public static SymbolMemberInfo? GetPublicFiledOrProperty(ISymbol symbol, StrongBox<int> index)
+    public static Location GetLocationOrNone(ISymbol symbol)
     {
-        if (symbol.DeclaredAccessibility is not Accessibility.Public)
-            return null;
-        if (symbol is IFieldSymbol fieldSymbol)
-            return new SymbolMemberInfo(SymbolMemberType.Field, fieldSymbol.Name, fieldSymbol.IsReadOnly, fieldSymbol.Type, index.Value++);
-        if (symbol is IPropertySymbol propertySymbol)
-            return new SymbolMemberInfo(SymbolMemberType.Property, propertySymbol.Name, propertySymbol.IsReadOnly, propertySymbol.Type, index.Value++);
-        return null;
+        if (symbol.Locations.Length is 0)
+            return Location.None;
+        return symbol.Locations.First();
     }
 
-    public static SymbolDisplayFormat FullyQualifiedFormatNoSpecialTypes { get; } =
-        new SymbolDisplayFormat(
-            globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
-            typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
-            genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
-            miscellaneousOptions: SymbolDisplayMiscellaneousOptions.EscapeKeywordIdentifiers);
+    public static Location GetLocationOrNone(AttributeData attribute)
+    {
+        var reference = attribute.ApplicationSyntaxReference;
+        if (reference is not null)
+            return Location.Create(reference.SyntaxTree, reference.Span);
+        return Location.None;
+    }
 }

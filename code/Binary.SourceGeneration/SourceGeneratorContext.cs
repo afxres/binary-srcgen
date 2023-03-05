@@ -1,5 +1,6 @@
 ﻿namespace Mikodev.Binary.SourceGeneration;
 
+using Microsoft.CodeAnalysis;
 using System.Collections.Generic;
 
 #nullable enable
@@ -12,12 +13,18 @@ public class SourceGeneratorContext
 
     public string Namespace { get; }
 
+    public Compilation Compilation { get; }
+
+    public SourceProductionContext SourceProductionContext { get; }
+
     public IEnumerable<string> ConverterCreators => this.creators;
 
-    public SourceGeneratorContext(string name, string @namespace)
+    public SourceGeneratorContext(string name, string @namespace, Compilation compilation, SourceProductionContext sourceProductionContext)
     {
-        this.Name = name;
-        this.Namespace = @namespace;
+        Name = name;
+        Namespace = @namespace;
+        Compilation = compilation;
+        SourceProductionContext = sourceProductionContext;
     }
 
     public void AddConverterCreator(string creator)

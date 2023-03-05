@@ -4,7 +4,6 @@ using Microsoft.CodeAnalysis;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Text;
 
 #nullable enable
@@ -29,6 +28,8 @@ public class TupleConverterContext
 
     private string outputConverterFileNamePrefix;
 
+    private INamedTypeSymbol? tupleKeyAttributeSymbol;
+
     private string GetTypeAlias(ITypeSymbol type)
     {
         var typeFullName = type.ToDisplayString(StaticExtensions.FullyQualifiedFormatNoSpecialTypes);
@@ -46,18 +47,33 @@ public class TupleConverterContext
         this.sourceProductionContext.CancellationToken.ThrowIfCancellationRequested();
     }
 
-    public TupleConverterContext(SourceGeneratorContext sourceGeneratorContext, INamedTypeSymbol namedTypeSymbol, SourceProductionContext sourceProductionContext)
+    private SymbolMemberInfo? GetPublicFiledOrProperty(ISymbol symbol)
+    {
+        if (symbol.DeclaredAccessibility is not Accessibility.Public)
+            return null;
+        var attributes = symbol.GetAttributes();
+        var attribute = attributes.FirstOrDefault(x => SymbolEqualityComparer.Default.Equals(x.AttributeClass, this.tupleKeyAttributeSymbol));
+        if (attribute is null || attribute.ConstructorArguments.FirstOrDefault().Value is not int index)
+            return null;
+        if (symbol is IFieldSymbol fieldSymbol)
+            return new SymbolMemberInfo(SymbolMemberType.Field, fieldSymbol.Name, fieldSymbol.IsReadOnly, fieldSymbol.Type, index);
+        if (symbol is IPropertySymbol propertySymbol)
+            return new SymbolMemberInfo(SymbolMemberType.Property, propertySymbol.Name, propertySymbol.IsReadOnly, propertySymbol.Type, index);
+        return null;
+    }
+
+    public TupleConverterContext(SourceGeneratorContext sourceGeneratorContext, INamedTypeSymbol namedTypeSymbol)
     {
         this.sourceGeneratorContext = sourceGeneratorContext ?? throw new ArgumentNullException(nameof(sourceGeneratorContext));
         this.namedTypeSymbol = namedTypeSymbol ?? throw new ArgumentNullException(nameof(namedTypeSymbol));
-        this.sourceProductionContext = sourceProductionContext;
+        this.sourceProductionContext = sourceGeneratorContext.SourceProductionContext;
     }
 
     public void Invoke()
     {
         ThrowIfCancelled();
-        var sharedIndex = new StrongBox<int> { Value = 0 };
-        var members = this.namedTypeSymbol.GetMembers().Select(x => StaticExtensions.GetPublicFiledOrProperty(x, sharedIndex)).OfType<SymbolMemberInfo>().OrderBy(x => x.Index).ToList();
+        this.tupleKeyAttributeSymbol = this.sourceGeneratorContext.Compilation.GetTypeByMetadataName(StaticExtensions.TupleKeyAttributeTypeName);
+        var members = this.namedTypeSymbol.GetMembers().Select(GetPublicFiledOrProperty).OfType<SymbolMemberInfo>().OrderBy(x => x.Index).ToList();
         foreach (var i in members)
             _ = GetTypeAlias(i.Type);
         this.members = members;

@@ -42,21 +42,21 @@ public sealed class SourceGenerator : IIncrementalGenerator
             var partial = node.Modifiers.Any(x => x.IsKind(SyntaxKind.PartialKeyword));
             if (partial is false)
             {
-                var location = typeSymbol.Locations.Length is 0 ? Location.None : typeSymbol.Locations.First();
+                var location = StaticExtensions.GetLocationOrNone(typeSymbol);
                 context.ReportDiagnostic(Diagnostic.Create(StaticExtensions.ContextTypeMustBePartial, location, new[] { typeSymbol.Name }));
                 continue;
             }
             var @namespace = typeSymbol.ContainingNamespace;
             if (@namespace.IsGlobalNamespace)
             {
-                var location = typeSymbol.Locations.Length is 0 ? Location.None : typeSymbol.Locations.First();
+                var location = StaticExtensions.GetLocationOrNone(typeSymbol);
                 context.ReportDiagnostic(Diagnostic.Create(StaticExtensions.ContextTypeMustHaveNamespace, location, new[] { typeSymbol.Name }));
                 continue;
             }
             var contextTypeName = typeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
             var contextTypeNamespace = @namespace.ToDisplayString();
 
-            var includedTypes = new List<INamedTypeSymbol>();
+            var includedTypes = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
             var attributes = typeSymbol.GetAttributes();
             foreach (var i in attributes)
             {
@@ -68,16 +68,19 @@ public sealed class SourceGenerator : IIncrementalGenerator
                     continue;
                 if (attribute.TypeArguments.Single() is not INamedTypeSymbol includedType)
                     continue;
-                includedTypes.Add(includedType);
+                if (includedTypes.Add(includedType))
+                    continue;
+                var location = StaticExtensions.GetLocationOrNone(i);
+                context.ReportDiagnostic(Diagnostic.Create(StaticExtensions.IncludeTypeDuplicated, location, new[] { includedType.Name }));
             }
 
-            var sourceGeneratorContext = new SourceGeneratorContext(contextTypeName, contextTypeNamespace);
+            var sourceGeneratorContext = new SourceGeneratorContext(contextTypeName, contextTypeNamespace, compilation, context);
             var tupleObjectSymbol = compilation.GetTypeByMetadataName(StaticExtensions.TupleObjectAttributeTypeName);
             foreach (var type in includedTypes)
             {
                 if (type.GetAttributes().Any(x => SymbolEqualityComparer.Default.Equals(x.AttributeClass, tupleObjectSymbol)))
                 {
-                    new TupleConverterContext(sourceGeneratorContext, type, context).Invoke();
+                    new TupleConverterContext(sourceGeneratorContext, type).Invoke();
                 }
             }
 
@@ -88,7 +91,7 @@ public sealed class SourceGenerator : IIncrementalGenerator
             builder.AppendIndent(0);
             builder.AppendIndent(0, $"partial class {contextTypeName}");
             builder.AppendIndent(0, $"{{");
-            builder.AppendIndent(1, $"public static {CreatorsCollectionInterfaceType} creators {{ get; }} = new {CreatorsCollectionType}()");
+            builder.AppendIndent(1, $"public static {CreatorsCollectionInterfaceType} ConverterCreators {{ get; }} = new {CreatorsCollectionType}()");
             builder.AppendIndent(1, $"{{");
             foreach (var i in sourceGeneratorContext.ConverterCreators)
             {
