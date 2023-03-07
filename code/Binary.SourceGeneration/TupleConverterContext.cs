@@ -12,8 +12,6 @@ public class TupleConverterContext
 {
     private static readonly ImmutableArray<string> SystemTupleMemberNames = ImmutableArray.Create(new[] { "Item1", "Item2", "Item3", "Item4", "Item5", "Item6", "Item7", "Rest" });
 
-    private readonly INamedTypeSymbol namedTypeSymbol;
-
     private readonly SourceProductionContext productionContext;
 
     private readonly SourceGeneratorContext generatorContext;
@@ -31,12 +29,12 @@ public class TupleConverterContext
         this.productionContext.CancellationToken.ThrowIfCancellationRequested();
     }
 
-    private SymbolMemberInfo? GetCustomTupleMember(ISymbol member)
+    private static SymbolMemberInfo? GetCustomTupleMember(SourceGeneratorContext context, ISymbol member)
     {
         if (member.DeclaredAccessibility is not Accessibility.Public)
             return null;
         var attributes = member.GetAttributes();
-        var attribute = attributes.FirstOrDefault(x => SymbolEqualityComparer.Default.Equals(x.AttributeClass, this.generatorContext.TupleKeyAttributeTypeSymbol));
+        var attribute = attributes.FirstOrDefault(x => SymbolEqualityComparer.Default.Equals(x.AttributeClass, context.TupleKeyAttributeTypeSymbol));
         if (attribute is null || attribute.ConstructorArguments.FirstOrDefault().Value is not int index)
             return null;
         if (member is IFieldSymbol fieldSymbol)
@@ -46,12 +44,12 @@ public class TupleConverterContext
         return null;
     }
 
-    private List<SymbolMemberInfo> GetCustomTupleMembers(INamedTypeSymbol symbol)
+    private static List<SymbolMemberInfo> GetCustomTupleMembers(SourceGeneratorContext context, INamedTypeSymbol symbol)
     {
-        return symbol.GetMembers().Select(GetCustomTupleMember).OfType<SymbolMemberInfo>().OrderBy(x => x.Index).ToList();
+        return symbol.GetMembers().Select(x => GetCustomTupleMember(context, x)).OfType<SymbolMemberInfo>().OrderBy(x => x.Index).ToList();
     }
 
-    private List<SymbolMemberInfo> GetSystemTupleMembers(INamedTypeSymbol symbol)
+    private static List<SymbolMemberInfo> GetSystemTupleMembers(INamedTypeSymbol symbol)
     {
         var members = symbol.GetMembers();
         var result = new List<SymbolMemberInfo>();
@@ -70,14 +68,13 @@ public class TupleConverterContext
 
     private TupleConverterContext(SourceGeneratorContext context, INamedTypeSymbol symbol, bool systemTuple)
     {
-        this.namedTypeSymbol = symbol;
-        this.generatorContext = context;
-        this.productionContext = context.SourceProductionContext;
         var typeAliases = new SymbolTypeAliases(symbol);
-        var targetName = StaticExtensions.GetSafeTargetTypeName(this.namedTypeSymbol);
-        var members = systemTuple ? GetSystemTupleMembers(symbol) : GetCustomTupleMembers(symbol);
+        var targetName = StaticExtensions.GetSafeTargetTypeName(symbol);
+        var members = systemTuple ? GetSystemTupleMembers(symbol) : GetCustomTupleMembers(context, symbol);
         foreach (var i in members)
             typeAliases.Add(i.Type);
+        this.generatorContext = context;
+        this.productionContext = context.SourceProductionContext;
         this.members = members;
         this.typeAlias = typeAliases.GetAlias(symbol);
         this.typeAliases = typeAliases;

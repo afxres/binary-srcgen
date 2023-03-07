@@ -48,6 +48,8 @@ public static class StaticExtensions
 
     public const string IGeneratorContextTypeName = "Mikodev.Binary.IGeneratorContext";
 
+    public const string IEnumerableTypeName = "System.Collections.Generic.IEnumerable`1";
+
     public const string DiagnosticCategory = "SourceGeneration";
 
     public static DiagnosticDescriptor ContextTypeMustBePartial { get; } = new DiagnosticDescriptor(

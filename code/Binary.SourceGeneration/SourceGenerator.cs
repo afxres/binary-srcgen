@@ -79,6 +79,7 @@ public sealed class SourceGenerator : IIncrementalGenerator
             var handlers = new List<Func<SourceGeneratorContext, INamedTypeSymbol, bool>>
             {
                 TupleConverterContext.Invoke,
+                EnumerableConverterContext.Invoke,
             };
 
             foreach (var type in includedTypes)
