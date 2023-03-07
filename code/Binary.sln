@@ -7,7 +7,9 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Binary.SourceGeneration", "
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Binary.SourceGeneration.Tests", "Binary.SourceGeneration.Tests\Binary.SourceGeneration.Tests.csproj", "{2455D855-4B19-4D25-833E-FDD93C53646B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Binary.SourceGeneration.TupleObjectTests", "Binary.SourceGeneration.TupleObjectTests\Binary.SourceGeneration.TupleObjectTests.csproj", "{8BD3AB17-D766-4C03-8E05-D3B8B3B53093}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Binary.SourceGeneration.TupleObjectTests", "Binary.SourceGeneration.TupleObjectTests\Binary.SourceGeneration.TupleObjectTests.csproj", "{8BD3AB17-D766-4C03-8E05-D3B8B3B53093}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Binary.SourceGeneration.CollectionTests", "Binary.SourceGeneration.CollectionTests\Binary.SourceGeneration.CollectionTests.csproj", "{120D4B05-951B-4250-85B5-517AE5AB03B2}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -27,6 +29,10 @@ Global
 		{8BD3AB17-D766-4C03-8E05-D3B8B3B53093}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8BD3AB17-D766-4C03-8E05-D3B8B3B53093}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8BD3AB17-D766-4C03-8E05-D3B8B3B53093}.Release|Any CPU.Build.0 = Release|Any CPU
+		{120D4B05-951B-4250-85B5-517AE5AB03B2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{120D4B05-951B-4250-85B5-517AE5AB03B2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{120D4B05-951B-4250-85B5-517AE5AB03B2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{120D4B05-951B-4250-85B5-517AE5AB03B2}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
