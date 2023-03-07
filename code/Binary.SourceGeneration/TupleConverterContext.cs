@@ -1,7 +1,6 @@
 ﻿namespace Mikodev.Binary.SourceGeneration;
 
 using Microsoft.CodeAnalysis;
-using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -19,9 +18,7 @@ public class TupleConverterContext
 
     private readonly SourceGeneratorContext generatorContext;
 
-    private readonly SortedDictionary<string, string> typeAliases = new SortedDictionary<string, string>(StringComparer.Ordinal);
-
-    private int typeAliasIndex = 0;
+    private readonly SymbolTypeAliases typeAliases;
 
     private readonly List<SymbolMemberInfo> members;
 
@@ -29,24 +26,12 @@ public class TupleConverterContext
 
     private readonly string outputConverterName;
 
-    private string GetTypeAlias(ITypeSymbol type)
-    {
-        var typeFullName = StaticExtensions.GetFullName(type);
-        if (this.typeAliases.TryGetValue(typeFullName, out var result))
-            return result;
-        var typeAlias = SymbolEqualityComparer.Default.Equals(type, this.namedTypeSymbol)
-            ? $"_TSelf"
-            : $"_T{this.typeAliasIndex++}";
-        this.typeAliases.Add(typeFullName, typeAlias);
-        return typeAlias;
-    }
-
     private void ThrowIfCancelled()
     {
         this.productionContext.CancellationToken.ThrowIfCancellationRequested();
     }
 
-    private SymbolMemberInfo? GetMember(ISymbol member)
+    private SymbolMemberInfo? GetCustomTupleMember(ISymbol member)
     {
         if (member.DeclaredAccessibility is not Accessibility.Public)
             return null;
@@ -63,7 +48,7 @@ public class TupleConverterContext
 
     private List<SymbolMemberInfo> GetCustomTupleMembers(INamedTypeSymbol symbol)
     {
-        return symbol.GetMembers().Select(GetMember).OfType<SymbolMemberInfo>().OrderBy(x => x.Index).ToList();
+        return symbol.GetMembers().Select(GetCustomTupleMember).OfType<SymbolMemberInfo>().OrderBy(x => x.Index).ToList();
     }
 
     private List<SymbolMemberInfo> GetSystemTupleMembers(INamedTypeSymbol symbol)
@@ -85,15 +70,17 @@ public class TupleConverterContext
 
     private TupleConverterContext(SourceGeneratorContext context, INamedTypeSymbol symbol, bool systemTuple)
     {
-        this.generatorContext = context ?? throw new ArgumentNullException(nameof(context));
-        this.namedTypeSymbol = symbol ?? throw new ArgumentNullException(nameof(symbol));
+        this.namedTypeSymbol = symbol;
+        this.generatorContext = context;
         this.productionContext = context.SourceProductionContext;
+        var typeAliases = new SymbolTypeAliases(symbol);
         var targetName = StaticExtensions.GetSafeTargetTypeName(this.namedTypeSymbol);
         var members = systemTuple ? GetSystemTupleMembers(symbol) : GetCustomTupleMembers(symbol);
         foreach (var i in members)
-            _ = GetTypeAlias(i.Type);
+            typeAliases.Add(i.Type);
         this.members = members;
-        this.typeAlias = GetTypeAlias(this.namedTypeSymbol);
+        this.typeAlias = typeAliases.GetAlias(symbol);
+        this.typeAliases = typeAliases;
         this.outputConverterName = $"{targetName}_Converter";
     }
 
@@ -106,13 +93,13 @@ public class TupleConverterContext
             var last = (i == members.Count - 1);
             var tail = last ? ")" : ",";
             var member = members[i];
-            builder.AppendIndent(3, $"{StaticExtensions.ConverterTypeName}<{GetTypeAlias(member.Type)}> _arg{member.Index}{tail}");
+            builder.AppendIndent(3, $"{StaticExtensions.ConverterTypeName}<{this.typeAliases.GetAlias(member.Type)}> arg{member.Index}{tail}");
             ThrowIfCancelled();
         }
         builder.AppendIndent(2, $"{{");
         for (var i = 0; i < members.Count; i++)
         {
-            builder.AppendIndent(3, $"this._cvt{i} = _arg{i};");
+            builder.AppendIndent(3, $"this.cvt{i} = arg{i};");
             ThrowIfCancelled();
         }
         builder.AppendIndent(2, $"}}");
@@ -129,7 +116,7 @@ public class TupleConverterContext
             var last = (i == members.Count - 1);
             var member = members[i];
             var method = (auto || last is false) ? "EncodeAuto" : "Encode";
-            builder.AppendIndent(3, $"this._cvt{i}.{method}(ref allocator, item.{member.Name});");
+            builder.AppendIndent(3, $"this.cvt{i}.{method}(ref allocator, item.{member.Name});");
             ThrowIfCancelled();
         }
         builder.AppendIndent(2, $"}}");
@@ -150,7 +137,7 @@ public class TupleConverterContext
             var last = (i == members.Count - 1);
             var method = (auto || last is false) ? "DecodeAuto" : "Decode";
             var keyword = (auto is false && last) ? "in" : "ref";
-            builder.AppendIndent(3, $"var _var{i} = this._cvt{i}.{method}({keyword} {bufferName});");
+            builder.AppendIndent(3, $"var var{i} = this.cvt{i}.{method}({keyword} {bufferName});");
             ThrowIfCancelled();
         }
         builder.AppendIndent(3, $"var result = new {this.typeAlias}()");
@@ -158,7 +145,7 @@ public class TupleConverterContext
         for (var i = 0; i < members.Count; i++)
         {
             var member = members[i];
-            builder.AppendIndent(4, $"{member.Name} = _var{i},");
+            builder.AppendIndent(4, $"{member.Name} = var{i},");
             ThrowIfCancelled();
         }
         builder.AppendIndent(3, $"}};");
@@ -172,8 +159,7 @@ public class TupleConverterContext
         var members = this.members;
         builder.AppendIndent(0, $"namespace {this.generatorContext.Namespace};");
         builder.AppendIndent(0);
-        foreach (var i in this.typeAliases)
-            builder.AppendIndent(0, $"using {i.Value} = {i.Key};");
+        this.typeAliases.AppendAliases(builder);
         builder.AppendIndent(0);
 
         builder.AppendIndent(0, $"partial class {this.generatorContext.Name}");
@@ -182,7 +168,7 @@ public class TupleConverterContext
         builder.AppendIndent(1, $"{{");
         foreach (var i in members)
         {
-            builder.AppendIndent(2, $"private readonly {StaticExtensions.ConverterTypeName}<{GetTypeAlias(i.Type)}> _cvt{i.Index};");
+            builder.AppendIndent(2, $"private readonly {StaticExtensions.ConverterTypeName}<{this.typeAliases.GetAlias(i.Type)}> cvt{i.Index};");
             builder.AppendIndent(2);
             ThrowIfCancelled();
         }
@@ -210,8 +196,7 @@ public class TupleConverterContext
         var members = this.members;
         builder.AppendIndent(0, $"namespace {this.generatorContext.Namespace};");
         builder.AppendIndent(0);
-        foreach (var i in this.typeAliases)
-            builder.AppendIndent(0, $"using {i.Value} = {i.Key};");
+        this.typeAliases.AppendAliases(builder);
         builder.AppendIndent(0);
 
         var outputConverterCreatorName = $"{this.outputConverterName}Creator";
@@ -226,8 +211,8 @@ public class TupleConverterContext
         builder.AppendIndent(4, $"return null;");
         foreach (var i in members)
         {
-            var alias = GetTypeAlias(i.Type);
-            builder.AppendIndent(3, $"var _cvt{i.Index} = ({StaticExtensions.ConverterTypeName}<{alias}>)context.GetConverter(typeof({alias}));");
+            var alias = this.typeAliases.GetAlias(i.Type);
+            builder.AppendIndent(3, $"var cvt{i.Index} = ({StaticExtensions.ConverterTypeName}<{alias}>)context.GetConverter(typeof({alias}));");
             ThrowIfCancelled();
         }
 
@@ -236,7 +221,7 @@ public class TupleConverterContext
         {
             var last = (i == members.Count - 1);
             var tail = last ? ");" : ",";
-            builder.AppendIndent(4, $"_cvt{i}{tail}");
+            builder.AppendIndent(4, $"cvt{i}{tail}");
         }
         builder.AppendIndent(3, $"return ({StaticExtensions.IConverterTypeName})converter;");
         builder.AppendIndent(2, $"}}");
