@@ -6,6 +6,9 @@ using System.Collections.Generic;
 using Xunit;
 
 [SourceGeneratorContext]
+[SourceGeneratorInclude<Tuple<int, int>>]
+[SourceGeneratorInclude<Tuple<int, string>>]
+[SourceGeneratorInclude<Tuple<string, int, double>>]
 [SourceGeneratorInclude<ValueTuple<int, int>>]
 [SourceGeneratorInclude<ValueTuple<int, string>>]
 [SourceGeneratorInclude<ValueTuple<string, int, double>>]
@@ -13,7 +16,14 @@ public partial class SystemTupleSourceGeneratorContext { }
 
 public class SystemTupleTests
 {
-    public static IEnumerable<object[]> GetValueTupleData()
+    public static IEnumerable<object[]> TupleData()
+    {
+        yield return new object[] { Tuple.Create(1, 2) };
+        yield return new object[] { Tuple.Create(4096, "String") };
+        yield return new object[] { Tuple.Create("First", 2, 3.0) };
+    }
+
+    public static IEnumerable<object[]> ValueTupleData()
     {
         yield return new object[] { (1, 2) };
         yield return new object[] { (4096, "String") };
@@ -21,7 +31,8 @@ public class SystemTupleTests
     }
 
     [Theory(DisplayName = "System Tuple Test")]
-    [MemberData(nameof(GetValueTupleData))]
+    [MemberData(nameof(TupleData))]
+    [MemberData(nameof(ValueTupleData))]
     public void ValueTupleTest<T>(T source)
     {
         var builder = Generator.CreateDefaultBuilder();
